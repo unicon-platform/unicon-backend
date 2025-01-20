@@ -10,6 +10,7 @@ from unicon_backend.dependencies.auth import get_current_user
 from unicon_backend.dependencies.common import get_db_session
 from unicon_backend.dependencies.project import get_project_by_id
 from unicon_backend.evaluator.problem import Problem
+from unicon_backend.lib.permissions.permission import permission_check, permission_create
 from unicon_backend.models.links import UserRole
 from unicon_backend.models.organisation import InvitationKey, Project, Role
 from unicon_backend.models.problem import (
@@ -59,8 +60,11 @@ def update_project(
     db_session: Annotated[Session, Depends(get_db_session)],
     update_data: ProjectUpdate,
     project: Annotated[Project, Depends(get_project_by_id)],
+    user: Annotated[UserORM, Depends(get_current_user)],
 ):
     # TODO: Add permissions here - currently just checking if user is part of project
+    if not permission_check(project, "edit", user):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Permission denied")
 
     project.sqlmodel_update(update_data)
     db_session.commit()
@@ -145,6 +149,8 @@ def create_role(
     db_session.commit()
     db_session.refresh(role)
 
+    permission_create(role)
+
     return role
 
 
@@ -187,10 +193,14 @@ def join_project(
     ).first()
 
     if user_role:
+        # TODO(permission): delete user_role record
         db_session.delete(user_role)
 
-    db_session.add(UserRole(user_id=user.id, role_id=role.id))
+    new_user_role = UserRole(user_id=user.id, role_id=role.id)
+    db_session.add(new_user_role)
     db_session.commit()
+
+    permission_create(new_user_role)
 
     return role.project
 
@@ -200,8 +210,10 @@ def create_problem(
     problem: Problem,
     db_session: Annotated[Session, Depends(get_db_session)],
     project: Annotated[Project, Depends(get_project_by_id)],
+    user: Annotated[UserORM, Depends(get_current_user)],
 ) -> ProblemORM:
-    # TODO: Add permissions here - currently just checking if project exists
+    if not permission_check(project, "create_problems", user):
+        raise HTTPException(HTTPStatus.FORBIDDEN, "Permission denied")
 
     new_problem = ProblemORM.from_problem(problem)
     project.problems.append(new_problem)
@@ -209,5 +221,7 @@ def create_problem(
     db_session.add(project)
     db_session.commit()
     db_session.refresh(new_problem)
+
+    permission_create(new_problem)
 
     return new_problem
